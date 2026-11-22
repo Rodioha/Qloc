@@ -7,7 +7,7 @@ source.include_exts = py,png,jpg,jpeg,kv,atlas,tflite,txt,h5,xml
 source.include_patterns = images/*,images/plants/*,models/*,file_paths.xml
 version = 0.1
 
-requirements = hostpython3==3.11.9,python3==3.11.9,kivy,numpy==1.26.4,plyer,pillow,pyjnius
+requirements = hostpython3==3.11.9,python3==3.11.9,kivy,numpy==v1.26.4,plyer,pillow,pyjnius
 
 orientation = portrait
 fullscreen = 0
