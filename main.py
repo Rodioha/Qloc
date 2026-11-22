@@ -83,7 +83,7 @@ class RecognitionTab(ThemedBackground):
             pos=lambda *a: setattr(self._preview_rect, 'pos', preview_box.pos),
             size=lambda *a: setattr(self._preview_rect, 'size', preview_box.size),
         )
-        self.image_widget = KvImage()
+        self.image_widget = KvImage(allow_stretch=True, keep_ratio=True)
         preview_box.add_widget(self.image_widget)
         self.add_widget(preview_box)
 
@@ -182,6 +182,7 @@ class RecognitionTab(ThemedBackground):
         if not path or not os.path.exists(path):
             self.result_label.text = "Файл не найден"
             return
+        self.image_widget.source = ""
         self.image_widget.source = path
         self.image_widget.reload()
         self.result_label.text = "Анализирую..."
