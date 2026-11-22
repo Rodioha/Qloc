@@ -29,9 +29,9 @@ android.permissions = CAMERA, READ_EXTERNAL_STORAGE, WRITE_EXTERNAL_STORAGE, REA
 
 # FileProvider для передачи Uri в камеру (Android 7+)
 #android.add_providers = androidx.core.content.FileProvider:org.qukloc.qukloc.fileprovider:file_paths.xml
-p4a.extra_args = --fileprovider-paths=file_paths.xml
+#p4a.extra_args = --fileprovider-paths=file_paths.xml
 #p4a.source_dir = /home/NinaR/Qukloc/.buildozer/android/platform/python-for-android
-
+android.add_resources = android_res
 [buildozer]
 log_level = 2
 pip_index_url = https://pypi.org/simple
