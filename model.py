@@ -1,29 +1,298 @@
-from keras.models import load_model  # TensorFlow is required for Keras to work
-from PIL import Image, ImageOps  # Install pillow instead of PIL
-import numpy as np
+# main.py
+import os
+import traceback
 
-def get_class(model_path, labels_path, image_path):
-    np.set_printoptions(suppress=True)
-    model = load_model(model_path, compile=False)
-    class_names = open(labels_path, "r", encoding="utf-8").readlines()
-    data = np.ndarray(shape=(1, 224, 224, 3), dtype=np.float32)
-    image = Image.open(image_path).convert("RGB")
+from kivy.app import App
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.button import Button
+from kivy.uix.label import Label
+from kivy.uix.image import Image as KvImage
+from kivy.uix.scrollview import ScrollView
+from kivy.uix.tabbedpanel import TabbedPanel, TabbedPanelItem
+from kivy.core.window import Window
+from kivy.clock import Clock
+from kivy.utils import platform
+from kivy.metrics import dp
+from kivy.graphics import Color, Rectangle, RoundedRectangle
 
-    size = (224, 224)
-    image = ImageOps.fit(image, size, Image.Resampling.LANCZOS)
+from model_tflite import get_class
+from database import get_nearby_places, find_main_place_by_partial_name
+from plants_database import get_plant_info, find_plant_by_partial_name
+from theme import THEMES
+from android_media import request_storage_permission, take_photo, pick_photo
 
-    image_array = np.asarray(image)
+# На десктопе — окно в пропорциях телефона (9:16)
+if platform != 'android':
+    Window.size = (400, 711)
+    Window.top = 60
+    Window.left = 60
 
-    normalized_image_array = (image_array.astype(np.float32) / 127.5) - 1
 
-    data[0] = normalized_image_array
+BTN_H = dp(48)
+TAB_H = dp(44)
+RESULT_H = dp(56)
 
-    prediction = model.predict(data)
-    index = np.argmax(prediction)
-    class_name = class_names[index]
-    confidence_score = prediction[0][index]
-    if confidence_score>0.3:
-        return class_name[2:]
-    else:
-        location="Извините, я пока не могу определить, где это"
-        return location
+
+class ThemedBackground(BoxLayout):
+    """BoxLayout с фоном из темы."""
+
+    def __init__(self, theme, **kwargs):
+        super().__init__(**kwargs)
+        self.theme = theme
+        with self.canvas.before:
+            Color(*theme['bg'])
+            self._rect = Rectangle(pos=self.pos, size=self.size)
+        self.bind(pos=self._update_rect, size=self._update_rect)
+
+    def _update_rect(self, *args):
+        self._rect.pos = self.pos
+        self._rect.size = self.size
+
+
+class RecognitionTab(ThemedBackground):
+    """Вкладка распознавания: работает и для мест, и для растений."""
+
+    def __init__(self, mode='places', **kwargs):
+        self.mode = mode
+        self.theme = THEMES[mode]
+        super().__init__(
+            theme=self.theme,
+            orientation='vertical',
+            padding=dp(10),
+            spacing=dp(10),
+            **kwargs
+        )
+        self.current_result = None
+
+        # --- Превью ---
+        preview_box = BoxLayout(padding=dp(4))
+        with preview_box.canvas.before:
+            Color(*self.theme['panel'])
+            self._preview_rect = RoundedRectangle(
+                pos=preview_box.pos,
+                size=preview_box.size,
+                radius=[dp(12)],
+            )
+        preview_box.bind(
+            pos=lambda *a: setattr(self._preview_rect, 'pos', preview_box.pos),
+            size=lambda *a: setattr(self._preview_rect, 'size', preview_box.size),
+        )
+        self.image_widget = KvImage()
+        preview_box.add_widget(self.image_widget)
+        self.add_widget(preview_box)
+
+        # --- Кнопки камеры и галереи ---
+        btn_row = BoxLayout(size_hint_y=None, height=BTN_H, spacing=dp(8))
+        btn_cam = self._make_button("Камера")
+        btn_gal = self._make_button("Галерея")
+        btn_cam.bind(on_press=self.on_take_photo)
+        btn_gal.bind(on_press=self.on_pick_photo)
+        btn_row.add_widget(btn_cam)
+        btn_row.add_widget(btn_gal)
+        self.add_widget(btn_row)
+
+        # --- Результат ---
+        self.result_label = Label(
+            text="Загрузите фото или сделайте снимок",
+            size_hint_y=None,
+            height=RESULT_H,
+            halign="center",
+            valign="middle",
+            color=self.theme['text'],
+            font_size=dp(15),
+        )
+        self.result_label.bind(size=self._update_label_size)
+        self.add_widget(self.result_label)
+
+        # --- Кнопка действия ---
+        btn_text = "Места поблизости" if mode == 'places' else "Где растёт"
+        self.btn_action = self._make_button(btn_text)
+        self.btn_action.bind(on_press=self.show_info)
+        self.btn_action.disabled = True
+        self.add_widget(self.btn_action)
+
+        # --- Скролл для карточек ---
+        self.scroll = ScrollView(size_hint_y=0.35)
+        self.scroll_content = BoxLayout(
+            orientation="vertical", size_hint_y=None, spacing=dp(10)
+        )
+        self.scroll_content.bind(
+            minimum_height=self.scroll_content.setter("height")
+        )
+        self.scroll.add_widget(self.scroll_content)
+        self.add_widget(self.scroll)
+
+    # ---------- Кнопка ----------
+    def _make_button(self, text):
+        btn = Button(
+            text=text,
+            size_hint_y=None,
+            height=BTN_H,
+            background_normal='',
+            background_color=(0, 0, 0, 0),
+            color=self.theme['text'],
+            font_size=dp(15),
+        )
+        with btn.canvas.before:
+            btn._bg_color = Color(*self.theme['accent'])
+            btn._bg_rect = RoundedRectangle(
+                pos=btn.pos, size=btn.size, radius=[dp(16)]
+            )
+
+        def _update_rect(inst, *args):
+            inst._bg_rect.pos = inst.pos
+            inst._bg_rect.size = inst.size
+
+        def _update_color(inst, value):
+            if inst.disabled:
+                inst._bg_color.rgba = (0.3, 0.3, 0.3, 1)
+            elif value == 'down':
+                inst._bg_color.rgba = self.theme['accent_dn']
+            else:
+                inst._bg_color.rgba = self.theme['accent']
+
+        btn.bind(pos=_update_rect, size=_update_rect, state=_update_color,
+                 disabled=_update_color)
+        return btn
+
+    def _update_label_size(self, instance, value):
+        instance.text_size = (value[0] - dp(20), None)
+
+    # --- Камера и галерея ---
+    def on_take_photo(self, *args):
+        try:
+            take_photo(self.process_image, error_callback=self._show_error)
+        except Exception as e:
+            self.result_label.text = f"Ошибка камеры: {e}"
+
+    def on_pick_photo(self, *args):
+        try:
+            pick_photo(self.process_image, error_callback=self._show_error)
+        except Exception as e:
+            self.result_label.text = f"Ошибка галереи: {e}"
+
+    def _show_error(self, msg):
+        self.result_label.text = str(msg)
+
+    # --- Обработка фото ---
+    def process_image(self, path):
+        if not path or not os.path.exists(path):
+            self.result_label.text = "Файл не найден"
+            return
+        self.image_widget.source = path
+        self.image_widget.reload()
+        self.result_label.text = "Анализирую..."
+        Clock.schedule_once(lambda dt: self._run_prediction(path), 0.1)
+
+    def _run_prediction(self, path):
+        try:
+            label, confidence = get_class(path, mode=self.mode)
+            if label is None:
+                self.current_result = None
+                self.result_label.text = "Не могу распознать (уверенность ниже 50%)"
+                self.btn_action.disabled = True
+                return
+            self.current_result = label
+            self.result_label.text = f"{label} ({confidence:.0%})"
+            self.btn_action.disabled = False
+        except Exception as e:
+            traceback.print_exc()
+            self.result_label.text = f"Ошибка: {e}"
+            self.btn_action.disabled = True
+
+    # --- Показ информации ---
+    def show_info(self, *args):
+        self.scroll_content.clear_widgets()
+        if not self.current_result:
+            return
+        if self.mode == 'places':
+            self._show_places_info()
+        else:
+            self._show_plant_info()
+
+    def _show_places_info(self):
+        place = self.current_result
+        full = find_main_place_by_partial_name(place)
+        if full:
+            place = full
+        for p in get_nearby_places(place):
+            self._add_card(p['name'], p['description'])
+
+    def _show_plant_info(self):
+        name = self.current_result
+        full = find_plant_by_partial_name(name)
+        if full:
+            name = full
+        info = get_plant_info(name)
+        self._add_card(
+            info['name'],
+            f"{info['description']}\n\n"
+            f"Где растёт: {info['habitat']}\n\n"
+            f"Уход: {info['care']}"
+        )
+
+    def _add_card(self, title_text, desc_text):
+        card = BoxLayout(
+            orientation="vertical",
+            size_hint_y=None,
+            padding=dp(8),
+            spacing=dp(4),
+        )
+        with card.canvas.before:
+            Color(*self.theme['panel'])
+            card._rect = RoundedRectangle(
+                pos=card.pos, size=card.size, radius=[dp(12)]
+            )
+        card.bind(
+            pos=lambda *a: setattr(card._rect, 'pos', card.pos),
+            size=lambda *a: setattr(card._rect, 'size', card.size),
+            minimum_height=card.setter('height'),
+        )
+
+        title = Label(
+            text=f"[b]{title_text}[/b]",
+            markup=True,
+            size_hint_y=None,
+            height=dp(28),
+            color=self.theme['text'],
+            font_size=dp(15),
+        )
+        desc = Label(
+            text=desc_text,
+            size_hint_y=None,
+            color=self.theme['text_dim'],
+            font_size=dp(13),
+            text_size=(Window.width - dp(40), None),
+        )
+        desc.bind(
+            width=lambda inst, w: setattr(inst, 'text_size', (w - dp(20), None))
+        )
+        desc.bind(texture_size=lambda inst, ts: setattr(inst, 'height', ts[1]))
+
+        card.add_widget(title)
+        card.add_widget(desc)
+        self.scroll_content.add_widget(card)
+
+
+class QukLocApp(App):
+    def build(self):
+        self.title = "QukLoc"
+
+        if platform == 'android':
+            request_storage_permission()
+        else:
+            Window.bind(on_drop_file=self._on_drop_file)
+
+        root = TabbedPanel(do_default_tab=False)
+        root.tab_width = Window.width / 2
+        root.background_color = THEMES['places']['bg']
+        root.default_tab_height = TAB_H
+
+        tab_places = TabbedPanelItem(text='Места')
+        tab_places.background_color = THEMES['places']['tab_active']
+        tab_places.color = THEMES['places']['text']
+        tab_places.add_widget(RecognitionTab(mode='places'))
+        root.add_widget(tab_places)
+
+        tab_plants = TabbedPanelItem(text='Растения')
+        tab_plants.background_color = THEMES['plants']['tab_active']
