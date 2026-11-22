@@ -12,7 +12,7 @@ requirements = hostpython3==3.11.9,python3==3.11.9,kivy,numpy,plyer,pillow,pyjni
 orientation = portrait
 fullscreen = 0
 
-android.api = 33
+android.api = 34
 android.minapi = 26
 android.ndk_api = 26
 android.ndk = 26b
