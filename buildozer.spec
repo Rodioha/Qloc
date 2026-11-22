@@ -13,8 +13,8 @@ orientation = portrait
 fullscreen = 0
 
 android.api = 33
-android.minapi = 24
-android.ndk_api = 24
+android.minapi = 26
+android.ndk_api = 26
 android.ndk = 25b
 android.archs = arm64-v8a, armeabi-v7a
 android.allow_backup = True
