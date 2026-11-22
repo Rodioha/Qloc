@@ -1,11 +1,11 @@
 import os
+import time
+import glob
 import traceback
 from kivy.utils import platform
 from kivy.logger import Logger
+from kivy.clock import Clock
 
-# =========================================================
-#                     ANDROID
-# =========================================================
 if platform == 'android':
     from jnius import autoclass, cast
     from android import activity
@@ -13,149 +13,192 @@ if platform == 'android':
     from android.storage import app_storage_path
 
     Intent = autoclass('android.content.Intent')
+    ContentValues = autoclass('android.content.ContentValues')
     MediaStore = autoclass('android.provider.MediaStore')
-    File = autoclass('java.io.File')
+    MediaColumns = autoclass('android.provider.MediaStore$MediaColumns')
+    ImagesMedia = autoclass('android.provider.MediaStore$Images$Media')
     FileOutputStream = autoclass('java.io.FileOutputStream')
-    FileProvider = autoclass('androidx.core.content.FileProvider')
+    BitmapCompressFormat = autoclass('android.graphics.Bitmap$CompressFormat')
+    BuildVersion = autoclass('android.os.Build$VERSION')
     PythonActivity = autoclass('org.kivy.android.PythonActivity')
 
-    FILE_PROVIDER_AUTHORITY = 'org.qukloc.qukloc.fileprovider'
+    REQ_CAMERA = 1001
+    REQ_GALLERY = 1002
+
+    def _run_on_ui(func, *args):
+        if func:
+            Clock.schedule_once(lambda dt: func(*args), 0)
+
+    def _clean_old_temp_files():
+        try:
+            pattern = os.path.join(app_storage_path(), "qukloc_img_*.jpg")
+            for f in glob.glob(pattern):
+                try:
+                    os.remove(f)
+                except OSError:
+                    pass
+        except Exception:
+            pass
+
+    def _new_temp_path():
+        _clean_old_temp_files()
+        return os.path.join(app_storage_path(), f"qukloc_img_{int(time.time() * 1000)}.jpg")
+
+    def _copy_uri_to_local(ctx, uri):
+        dest = _new_temp_path()
+        resolver = ctx.getContentResolver()
+        input_stream = resolver.openInputStream(uri)
+        if input_stream is None:
+            raise IOError("InputStream вернул None")
+
+        out_stream = FileOutputStream(dest)
+        buf = bytearray(8192)
+        total_bytes = 0
+        try:
+            while True:
+                bytes_read = input_stream.read(buf)
+                if bytes_read == -1:
+                    break
+                out_stream.write(buf, 0, bytes_read)
+                total_bytes += bytes_read
+            out_stream.flush()
+        finally:
+            out_stream.close()
+            input_stream.close()
+
+        if total_bytes == 0 or not os.path.exists(dest):
+            raise IOError("Файл пуст (0 байт)")
+
+        return dest
 
     def request_storage_permission():
-        perms = [
-            Permission.CAMERA,
-            Permission.READ_EXTERNAL_STORAGE,
-            Permission.WRITE_EXTERNAL_STORAGE,
-        ]
+        perms = [Permission.CAMERA]
         if hasattr(Permission, 'READ_MEDIA_IMAGES'):
             perms.append(Permission.READ_MEDIA_IMAGES)
+        else:
+            perms.extend([
+                Permission.READ_EXTERNAL_STORAGE,
+                Permission.WRITE_EXTERNAL_STORAGE,
+            ])
         request_permissions(perms)
 
     def take_photo(callback, error_callback=None):
-        def _do_take_photo():
+        def _launch_camera():
+            photo_uri = None
             try:
                 ctx = PythonActivity.mActivity
-                # Используем внутренний кэш — он всегда доступен и не требует прав на SD-карту
-                cache_dir = ctx.getCacheDir()
-                if not cache_dir.exists():
-                    cache_dir.mkdirs()
+                resolver = ctx.getContentResolver()
 
-                output_file = File(cache_dir, "qukloc_capture.jpg")
-                if output_file.exists():
-                    output_file.delete()
+                values = ContentValues()
+                values.put(MediaColumns.DISPLAY_NAME, f"qukloc_{int(time.time())}.jpg")
+                values.put(MediaColumns.MIME_TYPE, "image/jpeg")
+                if BuildVersion.SDK_INT >= 29:
+                    values.put(MediaColumns.RELATIVE_PATH, "Pictures/QukLoc")
 
-                output_path = output_file.getAbsolutePath()
-
-                uri = FileProvider.getUriForFile(
-                    ctx, FILE_PROVIDER_AUTHORITY, output_file
-                )
+                photo_uri = resolver.insert(ImagesMedia.EXTERNAL_CONTENT_URI, values)
 
                 intent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
-                intent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
-                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-
-                parcelable_uri = cast('android.os.Parcelable', uri)
-                intent.putExtra(MediaStore.EXTRA_OUTPUT, parcelable_uri)
+                if photo_uri is not None:
+                    intent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                    intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    parcelable_uri = cast('android.os.Parcelable', photo_uri)
+                    intent.putExtra(MediaStore.EXTRA_OUTPUT, parcelable_uri)
 
                 def on_activity_result(request_code, result_code, data):
-                    if request_code != 0x123:
+                    if request_code != REQ_CAMERA:
                         return
                     activity.unbind(on_activity_result=on_activity_result)
-                    if result_code == -1 and os.path.exists(output_path) and os.path.getsize(output_path) > 0:
-                        callback(output_path)
-                    else:
-                        if error_callback:
-                            error_callback(f"Снимок не сохранён (код: {result_code})")
-                        else:
-                            callback(None)
+
+                    if result_code != -1:
+                        if photo_uri is not None:
+                            try:
+                                resolver.delete(photo_uri, None, None)
+                            except Exception:
+                                pass
+                        _run_on_ui(error_callback, f"Съёмка отменена (код {result_code})")
+                        return
+
+                    if photo_uri is not None:
+                        try:
+                            local_path = _copy_uri_to_local(ctx, photo_uri)
+                            try:
+                                resolver.delete(photo_uri, None, None)
+                            except Exception:
+                                pass
+                            _run_on_ui(callback, local_path)
+                            return
+                        except Exception as e:
+                            Logger.warning(f"android_media: URI read failed, trying extras: {e}")
+
+                    try:
+                        if data is not None and data.getExtras() is not None:
+                            bmp = data.getExtras().get("data")
+                            if bmp is not None:
+                                dest = _new_temp_path()
+                                out = FileOutputStream(dest)
+                                bmp.compress(BitmapCompressFormat.JPEG, 95, out)
+                                out.flush()
+                                out.close()
+                                _run_on_ui(callback, dest)
+                                return
+                    except Exception as e:
+                        Logger.error(f"android_media: extras bitmap error: {e}")
+
+                    _run_on_ui(error_callback, "Камера не вернула изображение")
 
                 activity.bind(on_activity_result=on_activity_result)
-                ctx.startActivityForResult(intent, 0x123)
+                ctx.startActivityForResult(intent, REQ_CAMERA)
 
             except Exception as e:
                 Logger.error(f"android_media: take_photo error: {e}\n{traceback.format_exc()}")
-                if error_callback:
-                    error_callback(f"Ошибка камеры: {e}")
-                else:
-                    callback(None)
+                _run_on_ui(error_callback, f"Ошибка камеры: {e}")
 
         if not check_permission(Permission.CAMERA):
             def on_perm_result(permissions, grants):
                 if all(grants):
-                    _do_take_photo()
-                elif error_callback:
-                    error_callback("Нет системного разрешения на камеру")
+                    _launch_camera()
+                else:
+                    _run_on_ui(error_callback, "Разрешите доступ к камере в настройках")
             request_permissions([Permission.CAMERA], on_perm_result)
         else:
-            _do_take_photo()
+            _launch_camera()
 
     def pick_photo(callback, error_callback=None):
         try:
             ctx = PythonActivity.mActivity
-            intent = Intent(Intent.ACTION_GET_CONTENT)
-            intent.setType("image/*")
+            intent = Intent(Intent.ACTION_OPEN_DOCUMENT)
             intent.addCategory(Intent.CATEGORY_OPENABLE)
+            intent.setType("image/*")
             intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
 
             def on_activity_result(request_code, result_code, data):
-                if request_code != 0x124:
+                if request_code != REQ_GALLERY:
                     return
                 activity.unbind(on_activity_result=on_activity_result)
 
                 if result_code != -1 or data is None:
-                    callback(None)
+                    _run_on_ui(error_callback, "Выбор файла отменён")
                     return
 
                 try:
                     uri = data.getData()
                     if uri is None:
-                        if error_callback:
-                            error_callback("Галерея не вернула URI файла")
+                        _run_on_ui(error_callback, "Галерея не вернула URI")
                         return
 
-                    dest = os.path.join(app_storage_path(), "selected.jpg")
-                    resolver = ctx.getContentResolver()
-                    input_stream = resolver.openInputStream(uri)
-                    if input_stream is None:
-                        if error_callback:
-                            error_callback("Не удалось открыть поток файла из галереи")
-                        return
-
-                    # Нативное копирование через Java-потоки (надёжнее shutil на Android)
-                    out_stream = FileOutputStream(dest)
-                    buf = bytearray(8192)
-                    while True:
-                        bytes_read = input_stream.read(buf)
-                        if bytes_read == -1:
-                            break
-                        out_stream.write(buf, 0, bytes_read)
-
-                    out_stream.flush()
-                    out_stream.close()
-                    input_stream.close()
-
-                    callback(dest)
+                    local_path = _copy_uri_to_local(ctx, uri)
+                    _run_on_ui(callback, local_path)
                 except Exception as e:
                     Logger.error(f"android_media: gallery copy error: {e}\n{traceback.format_exc()}")
-                    if error_callback:
-                        error_callback(f"Ошибка чтения файла: {e}")
-                    else:
-                        callback(None)
+                    _run_on_ui(error_callback, f"Ошибка чтения: {e}")
 
             activity.bind(on_activity_result=on_activity_result)
-            ctx.startActivityForResult(intent, 0x124)
+            ctx.startActivityForResult(intent, REQ_GALLERY)
 
         except Exception as e:
             Logger.error(f"android_media: pick_photo error: {e}\n{traceback.format_exc()}")
-            if error_callback:
-                error_callback(f"Ошибка запуска галереи: {e}")
-            else:
-                callback(None)
+            _run_on_ui(error_callback, f"Ошибка галереи: {e}")
 
-
-# =========================================================
-#                     DESKTOP (WSL / Linux / Win / Mac)
-# =========================================================
 else:
     from kivy.uix.filechooser import FileChooserListView
     from kivy.uix.popup import Popup
@@ -173,7 +216,8 @@ else:
             "Камера работает только на Android.\n"
             "Используйте «Галерея» для выбора файла."
         )
-        callback(None)
+        if error_callback:
+            error_callback("Камера работает только на Android")
 
     def pick_photo(callback, error_callback=None):
         _open_file_chooser(callback)
