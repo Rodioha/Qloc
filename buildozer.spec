@@ -33,3 +33,4 @@ p4a.extra_args = --fileprovider-paths=file_paths.xml
 
 [buildozer]
 log_level = 2
+pip_index_url = https://pypi.org/simple
