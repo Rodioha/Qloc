@@ -7,7 +7,7 @@ source.include_exts = py,png,jpg,jpeg,kv,atlas,tflite,txt,h5,xml
 source.include_patterns = images/*,images/plants/*,models/*,file_paths.xml
 version = 0.1
 
-requirements = hostpython3==3.11.9,python3==3.11.9,kivy,numpy==v1.26.4,plyer,pillow,pyjnius
+requirements = hostpython3==3.11.9,python3==3.11.9,kivy,numpy,plyer,pillow,pyjnius
 
 orientation = portrait
 fullscreen = 0
@@ -15,7 +15,7 @@ fullscreen = 0
 android.api = 33
 android.minapi = 26
 android.ndk_api = 26
-android.ndk = 25b
+android.ndk = 26b
 android.archs = arm64-v8a, armeabi-v7a
 android.allow_backup = True
 android.accept_sdk_license = True
@@ -33,5 +33,5 @@ p4a.extra_args = --fileprovider-paths=file_paths.xml
 #p4a.source_dir = /home/NinaR/Qukloc/.buildozer/android/platform/python-for-android
 
 [buildozer]
-log_level = 1
+log_level = 2
 pip_index_url = https://pypi.org/simple
