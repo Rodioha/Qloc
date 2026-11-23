@@ -40,7 +40,6 @@ RESULT_H = dp(56)
 
 
 class ThemedBackground(BoxLayout):
-    """BoxLayout с фоном из темы."""
 
     def __init__(self, theme, **kwargs):
         super().__init__(**kwargs)
@@ -56,8 +55,6 @@ class ThemedBackground(BoxLayout):
 
 
 class RecognitionTab(ThemedBackground):
-    """Вкладка распознавания: работает и для мест, и для растений."""
-
     def __init__(self, mode='places', **kwargs):
         self.mode = mode
         self.theme = THEMES[mode]
@@ -70,7 +67,6 @@ class RecognitionTab(ThemedBackground):
         )
         self.current_result = None
 
-        # --- Превью ---
         preview_box = BoxLayout(padding=dp(4))
         with preview_box.canvas.before:
             Color(*self.theme['panel'])
@@ -85,9 +81,7 @@ class RecognitionTab(ThemedBackground):
         )
         self.image_widget = KvImage(allow_stretch=True, keep_ratio=True)
         preview_box.add_widget(self.image_widget)
-        self.add_widget(preview_box)
 
-        # --- Кнопки камеры и галереи ---
         btn_row = BoxLayout(size_hint_y=None, height=BTN_H, spacing=dp(8))
         btn_cam = self._make_button("Камера")
         btn_gal = self._make_button("Галерея")
@@ -97,7 +91,6 @@ class RecognitionTab(ThemedBackground):
         btn_row.add_widget(btn_gal)
         self.add_widget(btn_row)
 
-        # --- Результат ---
         self.result_label = Label(
             text="Загрузите фото или сделайте снимок",
             size_hint_y=None,
@@ -110,14 +103,12 @@ class RecognitionTab(ThemedBackground):
         self.result_label.bind(size=self._update_label_size)
         self.add_widget(self.result_label)
 
-        # --- Кнопка действия ---
         btn_text = "Места поблизости" if mode == 'places' else "Где растёт"
         self.btn_action = self._make_button(btn_text)
         self.btn_action.bind(on_press=self.show_info)
         self.btn_action.disabled = True
         self.add_widget(self.btn_action)
-
-        # --- Скролл для карточек ---
+-
         self.scroll = ScrollView(size_hint_y=0.35)
         self.scroll_content = BoxLayout(
             orientation="vertical", size_hint_y=None, spacing=dp(10)
@@ -128,7 +119,6 @@ class RecognitionTab(ThemedBackground):
         self.scroll.add_widget(self.scroll_content)
         self.add_widget(self.scroll)
 
-    # ---------- Кнопка ----------
     def _make_button(self, text):
         btn = Button(
             text=text,
@@ -164,7 +154,6 @@ class RecognitionTab(ThemedBackground):
     def _update_label_size(self, instance, value):
         instance.text_size = (value[0] - dp(20), None)
 
-    # --- Камера и галерея ---
     def on_take_photo(self, *args):
         try:
             take_photo(self.process_image)
@@ -177,7 +166,6 @@ class RecognitionTab(ThemedBackground):
         except Exception as e:
             self.result_label.text = f"Ошибка галереи: {e}"
 
-    # --- Обработка фото ---
     def process_image(self, path):
         if not path or not os.path.exists(path):
             self.result_label.text = "Файл не найден"
@@ -204,7 +192,6 @@ class RecognitionTab(ThemedBackground):
             self.result_label.text = f"Ошибка: {e}"
             self.btn_action.disabled = True
 
-    # --- Показ информации ---
     def show_info(self, *args):
         self.scroll_content.clear_widgets()
         if not self.current_result:
@@ -277,6 +264,119 @@ class RecognitionTab(ThemedBackground):
         card.add_widget(desc)
         self.scroll_content.add_widget(card)
 
+class HelpTab(ThemedBackground):
+    """Вкладка со справкой и инструкцией по приложению."""
+
+    def __init__(self, **kwargs):
+        self.theme = THEMES.get('help', THEMES['places'])
+        super().__init__(
+            theme=self.theme,
+            orientation='vertical',
+            padding=dp(12),
+            spacing=dp(10),
+            **kwargs
+        )
+
+        title = Label(
+            text="Инструкция по использованию",
+            size_hint_y=None,
+            height=dp(36),
+            font_size=dp(18),
+            bold=True,
+            color=self.theme['text'],
+            halign="center",
+            valign="middle",
+        )
+        title.bind(size=lambda inst, val: setattr(inst, 'text_size', val))
+        self.add_widget(title)
+
+        scroll = ScrollView(do_scroll_x=False)
+        content = BoxLayout(
+            orientation="vertical",
+            size_hint_y=None,
+            spacing=dp(10),
+            padding=(0, dp(4)),
+        )
+        content.bind(minimum_height=content.setter("height"))
+
+        sections = [
+            (
+                "1. Выбор режима",
+                "Переключайтесь между вкладками «Места» и «Растения» в верхней части экрана "
+                "в зависимости от того, что вы хотите распознать."
+            ),
+            (
+                "2. Загрузка фотографии",
+                "Нажмите «Камера», чтобы сделать новый снимок, или «Галерея», "
+                "чтобы выбрать готовое фото с устройства."
+            ),
+            (
+                "3. Распознавание",
+                "Нейросеть автоматически проанализирует изображение и покажет название объекта "
+                "с процентом уверенности. Для точного результата объект должен находиться в центре кадра "
+                "при хорошем освещении."
+            ),
+            (
+                "4. Подробная информация",
+                "Если уверенность выше 50%, станет активна кнопка «Места поблизости» или «Где растёт». "
+                "Нажмите её, чтобы открыть карточки с описанием, средой обитания или советами по уходу."
+            ),
+            (
+                "Если фото не открываются",
+                "Проверьте в настройках Android, выданы ли приложению разрешения на доступ к камере и файлам."
+            ),
+        ]
+
+        for sec_title, sec_body in sections:
+            content.add_widget(self._make_help_card(sec_title, sec_body))
+
+        scroll.add_widget(content)
+        self.add_widget(scroll)
+
+    def _make_help_card(self, title_text, body_text):
+        card = BoxLayout(
+            orientation="vertical",
+            size_hint_y=None,
+            padding=dp(12),
+            spacing=dp(6),
+        )
+        with card.canvas.before:
+            Color(*self.theme['panel'])
+            rect = RoundedRectangle(pos=card.pos, size=card.size, radius=[dp(12)])
+
+        card.bind(
+            pos=lambda inst, *a: setattr(rect, 'pos', inst.pos),
+            size=lambda inst, *a: setattr(rect, 'size', inst.size),
+        )
+
+        lbl_title = Label(
+            text=title_text,
+            font_size=dp(15),
+            bold=True,
+            color=self.theme['text'],
+            size_hint_y=None,
+            halign="left",
+            valign="top",
+        )
+        lbl_body = Label(
+            text=body_text,
+            font_size=dp(14),
+            color=self.theme['text'],
+            size_hint_y=None,
+            halign="left",
+            valign="top",
+        )
+
+        for lbl in (lbl_title, lbl_body):
+            lbl.bind(
+                width=lambda inst, val: setattr(inst, 'text_size', (val, None)),
+                texture_size=lambda inst, val: setattr(inst, 'height', val[1]),
+            )
+
+        card.add_widget(lbl_title)
+        card.add_widget(lbl_body)
+        card.bind(minimum_height=card.setter("height"))
+        return card
 
 class QukLocApp(App):
     def build(self):
@@ -292,7 +392,7 @@ class QukLocApp(App):
             Window.bind(on_drop_file=self._on_drop_file)
 
         root = TabbedPanel(do_default_tab=False)
-        root.tab_width = Window.width / 2
+        root.tab_width = Window.width / 3
         root.background_color = THEMES['places']['bg']
         root.default_tab_height = TAB_H
 
@@ -308,10 +408,15 @@ class QukLocApp(App):
         tab_plants.add_widget(RecognitionTab(mode='plants'))
         root.add_widget(tab_plants)
 
+        tab_help = TabbedPanelItem(text='Справка')
+        tab_help.background_color = THEMES.get('help', THEMES['places'])['tab_active']
+        tab_help.color = THEMES.get('help', THEMES['places'])['text']
+        tab_help.add_widget(HelpTab())
+        root.add_widget(tab_help)
+
         return root
 
     def _on_drop_file(self, window, file_path, *args):
-        """Обработка перетаскивания файла в окно (десктоп)."""
         path = file_path.decode('utf-8') if isinstance(file_path, bytes) else file_path
         if not path.lower().endswith(('.jpg', '.jpeg', '.png')):
             return
@@ -323,7 +428,6 @@ class QukLocApp(App):
                     break
         except Exception as e:
             print(f"drop error: {e}")
-
 
 if __name__ == "__main__":
     QukLocApp().run()
